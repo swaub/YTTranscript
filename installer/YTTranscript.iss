@@ -8,7 +8,7 @@
 ; Output: installer\Output\YTTranscript-Setup-1.0.0.exe
 
 #define AppName     "YTTranscript"
-#define AppVersion  "1.0.0"
+#define AppVersion  "1.1.0"
 #define AppPublisher "swaub"
 #define AppURL      "https://github.com/swaub/YTTranscript"
 #define AppExe      "YTTranscript.exe"
