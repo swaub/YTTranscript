@@ -14,6 +14,10 @@ click **Summarize** (a bundled Qwen2.5-3B instruct model via llama.cpp,
 map-reduced so arbitrarily long transcripts fit the context window), then
 **Copy** the summary to the clipboard.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="YTTranscript transcribing and summarizing a YouTube video" width="760">
+</p>
+
 > **Install (end users):** download `YTTranscript-Setup-x.y.z.exe` from the
 > [Releases](https://github.com/swaub/YTTranscript/releases) page, run it, choose
 > a **writable** folder (the per-user default is fine; avoid `Program Files`),
