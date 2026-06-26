@@ -1,0 +1,84 @@
+#include <windows.h>
+
+#define IDI_APPICON   101
+#define IDI_CLIPBOARD 102
+#define IDR_MAINMENU         200
+#define IDD_ENCODER          300
+#define IDM_SETTINGS_ENCODER 3001
+#define IDC_HW_INFO          3002
+#define IDC_TRANS_COMBO      3003
+#define IDC_SUM_COMBO        3004
+
+/* ------------------------------------------------------------------ *
+ *  Icons.  windres is invoked with -I res so these bare names resolve
+ *  to res/icon.ico and res/clipboard.ico (generated separately).
+ * ------------------------------------------------------------------ */
+IDI_APPICON   ICON "icon.ico"
+IDI_CLIPBOARD ICON "clipboard.ico"
+
+/* ------------------------------------------------------------------ *
+ *  Application manifest (CREATEPROCESS_MANIFEST_RESOURCE_ID == 1).
+ *  Pulls in comctl32 v6 visual styles + PerMonitorV2 DPI awareness.
+ * ------------------------------------------------------------------ */
+1 RT_MANIFEST "app.manifest"
+
+/* ------------------------------------------------------------------ *
+ *  Menu bar + the Encoder settings dialog.
+ * ------------------------------------------------------------------ */
+IDR_MAINMENU MENU
+BEGIN
+    POPUP "&Settings"
+    BEGIN
+        MENUITEM "&Encoder…", IDM_SETTINGS_ENCODER
+    END
+END
+
+IDD_ENCODER DIALOGEX 0, 0, 320, 182
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Encoder Settings"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT           "Detected hardware:", -1, 10, 8, 300, 9
+    LTEXT           "", IDC_HW_INFO, 10, 20, 300, 44
+    LTEXT           "Transcribe engine (Whisper):", -1, 10, 74, 150, 9
+    COMBOBOX        IDC_TRANS_COMBO, 165, 72, 145, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Summarize engine (LLM):", -1, 10, 96, 150, 9
+    COMBOBOX        IDC_SUM_COMBO, 165, 94, 145, 80,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "GPU engines download their backend on first use.", -1, 10, 122, 300, 9
+    DEFPUSHBUTTON   "OK", IDOK, 200, 158, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 255, 158, 50, 14
+END
+
+/* ------------------------------------------------------------------ *
+ *  Version information.
+ * ------------------------------------------------------------------ */
+1 VERSIONINFO
+FILEVERSION    1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK  0x3fL
+FILEFLAGS      0x0L
+FILEOS         0x40004L
+FILETYPE       0x1L
+FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "YTTranscript"
+            VALUE "FileDescription",  "YouTube Transcribe & Summarize"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "YTTranscript"
+            VALUE "LegalCopyright",   "YTTranscript"
+            VALUE "OriginalFilename", "YTTranscript.exe"
+            VALUE "ProductName",      "YTTranscript"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

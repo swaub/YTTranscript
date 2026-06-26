@@ -1,0 +1,18 @@
+# Build artifacts
+/build/
+/dist/
+*.o
+*.obj
+*.res
+*.exe
+
+# Installer output
+/installer/Output/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+.DS_Store
