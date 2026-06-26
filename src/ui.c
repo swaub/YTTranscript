@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <wchar.h>
+#define _RICHEDIT_VER 0x0300
+#include <richedit.h>
 
 /* Cosmetic label control ids (kept clear of the 1001..1009 control ids
  * in common.h and of the 101/102 resource ids). */
@@ -78,6 +80,87 @@ static void ApplyFontToAll(AppState *app)
 {
     if (app->hUiFont)
         EnumChildWindows(app->hMain, SetFontEnumProc, (LPARAM)app->hUiFont);
+}
+
+/* Append one run of text to the RichEdit summary box with the given weight. */
+static void rich_append(HWND h, const WCHAR *txt, int len, BOOL bold)
+{
+    if (len <= 0) return;
+    WCHAR *seg = (WCHAR *)malloc(((size_t)len + 1) * sizeof(WCHAR));
+    if (!seg) return;
+    memcpy(seg, txt, (size_t)len * sizeof(WCHAR));
+    seg[len] = L'\0';
+
+    int end = (int)SendMessageW(h, WM_GETTEXTLENGTH, 0, 0);
+    SendMessageW(h, EM_SETSEL, (WPARAM)end, (LPARAM)end);
+    CHARFORMAT2W cf;
+    ZeroMemory(&cf, sizeof cf);
+    cf.cbSize    = sizeof cf;
+    cf.dwMask    = CFM_BOLD;
+    cf.dwEffects = bold ? CFE_BOLD : 0;
+    SendMessageW(h, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    SendMessageW(h, EM_REPLACESEL, FALSE, (LPARAM)seg);
+    free(seg);
+}
+
+/* Render the model's Markdown-ish summary into the RichEdit box: **spans** and
+ * leading #/##/### headings become real bold (markers removed), and "- "/"* "
+ * bullets become a bullet glyph.  No external markdown dependency. */
+static void SetSummaryRich(AppState *app, const WCHAR *md)
+{
+    HWND h = app->hSummary;
+    if (!h || !md) return;
+
+    SendMessageW(h, EM_SETREADONLY, FALSE, 0);
+    SetWindowTextW(h, L"");
+
+    size_t n = wcslen(md);
+    WCHAR *run = (WCHAR *)malloc((n + 4) * sizeof(WCHAR));
+    if (!run) { SetWindowTextW(h, md); SendMessageW(h, EM_SETREADONLY, TRUE, 0); return; }
+    int rlen = 0, boldOn = 0, lineBold = 0, curBold = 0, atLineStart = 1;
+
+    for (size_t i = 0; i < n; ) {
+        WCHAR c = md[i];
+        if (c == L'\r') { i++; continue; }
+
+        if (atLineStart) {
+            if (c == L'#') {                       /* heading -> bold the line */
+                size_t j = i;
+                while (md[j] == L'#') j++;
+                if (md[j] == L' ') j++;
+                i = j; lineBold = 1; atLineStart = 0;
+                continue;
+            }
+            if ((c == L'-' || c == L'*') && md[i + 1] == L' ') {   /* bullet */
+                int want = boldOn || lineBold;
+                if (want != curBold) { if (rlen) { rich_append(h, run, rlen, curBold); rlen = 0; } curBold = want; }
+                run[rlen++] = 0x2022; run[rlen++] = L' ';
+                i += 2; atLineStart = 0;
+                continue;
+            }
+        }
+
+        if (c == L'*' && md[i + 1] == L'*') { boldOn = !boldOn; i += 2; atLineStart = 0; continue; }
+
+        int want = boldOn || lineBold;
+        if (want != curBold) { if (rlen) { rich_append(h, run, rlen, curBold); rlen = 0; } curBold = want; }
+
+        if (c == L'\n') {
+            run[rlen++] = L'\n';
+            rich_append(h, run, rlen, curBold); rlen = 0;
+            lineBold = 0; curBold = boldOn; atLineStart = 1;
+            i++; continue;
+        }
+
+        run[rlen++] = c;
+        i++; atLineStart = 0;
+    }
+    if (rlen) rich_append(h, run, rlen, curBold);
+    free(run);
+
+    SendMessageW(h, EM_SETSEL, 0, 0);
+    SendMessageW(h, EM_SETREADONLY, TRUE, 0);
+    SendMessageW(h, WM_VSCROLL, SB_TOP, 0);
 }
 
 static void ProgressMarquee(AppState *app, BOOL on)
@@ -568,7 +651,7 @@ static void BuildControls(HWND hwnd, AppState *app, HINSTANCE hInst)
                     0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)IDC_SUMMARY_LABEL,
                     hInst, NULL);
 
-    app->hSummary = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+    app->hSummary = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
                         ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                     0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)IDC_SUMMARY,
@@ -577,7 +660,11 @@ static void BuildControls(HWND hwnd, AppState *app, HINSTANCE hInst)
     /* Lift the default edit-control character cap so a long transcript or
      * summary is never silently truncated (0 => the multiline maximum). */
     SendMessageW(app->hTranscript, EM_SETLIMITTEXT, 0, 0);
-    SendMessageW(app->hSummary,    EM_SETLIMITTEXT, 0, 0);
+    /* Summary is a RichEdit (real bold for **headings**); lift its cap, wrap to
+     * the control width, and keep the window background colour. */
+    SendMessageW(app->hSummary, EM_EXLIMITTEXT, 0, (LPARAM)0x7FFFFFFF);
+    SendMessageW(app->hSummary, EM_SETTARGETDEVICE, 0, (LPARAM)0);
+    SendMessageW(app->hSummary, EM_SETBKGNDCOLOR, 0, (LPARAM)GetSysColor(COLOR_WINDOW));
 
     /* Tooltip on the icon-only Copy button. */
     HWND tip = CreateWindowExW(0, TOOLTIPS_CLASSW, NULL,
@@ -807,7 +894,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         WCHAR *s = (WCHAR *)lParam;
         if (s) {
             if (app) {
-                SetWindowTextW(app->hSummary, s);
+                SetSummaryRich(app, s);
                 g_haveSummary = TRUE;
                 UpdateButtons(app);
             }

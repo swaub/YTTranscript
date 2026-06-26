@@ -2,18 +2,19 @@
  *  summarize.c -- SummarizeThread + hierarchical map-reduce.
  *
  *  Fully offline via the bundled llama-completion.exe + Qwen2.5-3B-Instruct
- *  Q4_K_M GGUF (-c 8192).  Prompts are hand-built ChatML written to
- *  temp\_prompt.txt (UTF-8, no BOM) and fed with -f so transcript quotes/
- *  newlines and >32k bodies can never break the command line.
+ *  Q4_K_M GGUF (context auto-sized per call).  Prompts are hand-built ChatML
+ *  written to temp\_prompt.txt (UTF-8, no BOM) and fed with -f so transcript
+ *  quotes/newlines and large bodies can never break the command line.
  *
- *    MAP     each <=8000-char chunk -> 3-6 factual bullets
- *    REDUCE  recursively merge/de-duplicate while the concatenation
- *            still exceeds the chunk budget (true multi-level reduction)
- *    FINAL   one pass -> 2-3 sentence overview + key-point bullets
+ *    MAP     each chunk -> detailed factual bullet points (keep specifics)
+ *    REDUCE  recursively merge/de-duplicate (keeping all distinct points)
+ *            while the concatenation still exceeds the chunk budget
+ *    FINAL   one pass -> overview + comprehensive key-point bullets
  *
  *  Most transcripts (<= SINGLE_PASS_CHARS) skip MAP/REDUCE entirely and go
  *  straight to one FINAL pass = a single model load.  Only very long videos
- *  fall back to map-reduce.  Each call's -c is auto-sized to its prompt.
+ *  fall back to map-reduce.  The output budget (-n) scales with the input so
+ *  long videos get a fuller summary instead of a fixed cap.
  * ------------------------------------------------------------------ */
 
 #include "common.h"
@@ -25,14 +26,14 @@
 
 extern AppState *g_proc_cancel_app;
 
-#define CHUNK_CHARS       8000u   /* map/reduce chunk size for very long transcripts */
+#define CHUNK_CHARS       12000u  /* map/reduce chunk size for very long transcripts */
 #define OVERLAP_CHARS      200u
-#define SINGLE_PASS_CHARS 32000u  /* at or under this, summarize in ONE pass (one model load) */
+#define SINGLE_PASS_CHARS 48000u  /* at or under this, summarize in ONE pass (one model load) */
 
-static const char *SYS_SUM     = "You are a precise transcript summarizer.";
-static const char *MAP_INSTR   = "Summarize this section of a transcript as 3-6 concise factual bullet points; preserve names and facts; add nothing not present.";
-static const char *REDUCE_INSTR= "Merge and de-duplicate these partial notes into a tighter set of bullet points.";
-static const char *FINAL_INSTR = "Write a clear overall summary: a 2-3 sentence overview, then the key points as bullets.";
+static const char *SYS_SUM     = "You are a precise transcript summarizer. You preserve the important details and never omit significant points.";
+static const char *MAP_INSTR   = "Extract the key facts and points from this section of a transcript as detailed bullet points. Preserve names, numbers, technical terms, and specifics. Do not omit important details, and add nothing that is not present.";
+static const char *REDUCE_INSTR= "Combine these notes into a single list of bullet points. Remove only exact duplicates; keep every distinct point and all specific details.";
+static const char *FINAL_INSTR = "Write a thorough summary of the transcript: a short overview paragraph, then a comprehensive, well-organized set of bullet points covering all the main topics and important details in the order they appear. Do not omit significant points.";
 
 static char *sdup(const char *s)
 {
@@ -41,6 +42,8 @@ static char *sdup(const char *s)
     if (r) memcpy(r, s, n);
     return r;
 }
+
+static int clampi(long v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : (int)v); }
 
 static char *join_strs(char **a, size_t n, const char *sep)
 {
@@ -97,7 +100,7 @@ static void perf_cb(void *ud, const char *line)
 
 /* One llama-completion call.  Returns malloc'd assistant text (possibly empty),
  * or NULL only when the process could not be run / prompt not written. */
-static char *llama_run(AppState *app, const char *sys, const char *instr, const char *text)
+static char *llama_run(AppState *app, const char *sys, const char *instr, const char *text, int nPredict)
 {
     if (!text) text = "";
 
@@ -138,18 +141,22 @@ static char *llama_run(AppState *app, const char *sys, const char *instr, const 
      * at the model's 32K training context; ~3 chars/token is a safe (high)
      * estimate so we never under-size and truncate the transcript. */
     int nctx = 2048;
-    size_t estTok = promptLen / 3 + 512 /*output*/ + 256 /*margin*/;
+    size_t estTok = promptLen / 3 + (size_t)nPredict + 256 /*margin*/;
     while ((size_t)nctx < estTok && nctx < 32768) nctx <<= 1;
     WCHAR cbuf[16];
     _snwprintf(cbuf, 16, L"%d", nctx);
     cbuf[15] = L'\0';
+
+    WCHAR nbuf[16];
+    _snwprintf(nbuf, 16, L"%d", nPredict);
+    nbuf[15] = L'\0';
 
     WCHAR cmd[4096];
     cmd[0] = L'\0';
     ArgAppend(cmd, 4096, exe);
     ArgAppend(cmd, 4096, L"-m");      ArgAppend(cmd, 4096, model);
     ArgAppend(cmd, 4096, L"-c");      ArgAppend(cmd, 4096, cbuf);
-    ArgAppend(cmd, 4096, L"-n");      ArgAppend(cmd, 4096, L"512");
+    ArgAppend(cmd, 4096, L"-n");      ArgAppend(cmd, 4096, nbuf);
     ArgAppend(cmd, 4096, L"-t");      ArgAppend(cmd, 4096, tnum);
     ArgAppend(cmd, 4096, L"-ngl");    ArgAppend(cmd, 4096, nglbuf);
     ArgAppend(cmd, 4096, L"--temp");  ArgAppend(cmd, 4096, L"0.3");
@@ -211,7 +218,8 @@ char *SummarizeTranscript(AppState *app, HWND ui, const char *t)
                 free(P);
                 return NULL;
             }
-            char *part = llama_run(app, SYS_SUM, MAP_INSTR, chunks[i]);
+            char *part = llama_run(app, SYS_SUM, MAP_INSTR, chunks[i],
+                                   clampi((long)(strlen(chunks[i]) / 12), 384, 1024));
             free(chunks[i]);
             if (part && *part) P[np++] = part; else free(part);
             PostMessageW(ui, WM_APP_PROGRESS, (WPARAM)(((i + 1) * 85) / n), 0);
@@ -245,7 +253,8 @@ char *SummarizeTranscript(AppState *app, HWND ui, const char *t)
             }
             for (size_t i = 0; i < nc; ++i) {
                 if (!app->cancelFlag) {
-                    char *r = llama_run(app, SYS_SUM, REDUCE_INSTR, pieces[i]);
+                    char *r = llama_run(app, SYS_SUM, REDUCE_INSTR, pieces[i],
+                                        clampi((long)(strlen(pieces[i]) / 12), 384, 1024));
                     if (r && *r) R[nr++] = r; else free(r);
                 }
                 free(pieces[i]);
@@ -271,7 +280,8 @@ char *SummarizeTranscript(AppState *app, HWND ui, const char *t)
 
     /* ---- FINAL ---- */
     PostMessageW(ui, WM_APP_PROGRESS, (WPARAM)PROGRESS_MARQUEE, 0);
-    char *final = llama_run(app, SYS_SUM, FINAL_INSTR, joined);
+    char *final = llama_run(app, SYS_SUM, FINAL_INSTR, joined,
+                            clampi((long)(tlen / 22), 768, 1600));
     free(joined);
     return final;
 }

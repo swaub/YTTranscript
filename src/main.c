@@ -43,6 +43,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     icc.dwICC  = ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES;
     InitCommonControlsEx(&icc);
     RegisterProgressBarClass(hInstance);
+    LoadLibraryW(L"Msftedit.dll");   /* registers the RICHEDIT50W class for the summary box */
 
     AppState *app = (AppState *)calloc(1, sizeof(AppState));
     if (!app)
